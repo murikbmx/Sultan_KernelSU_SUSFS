@@ -212,6 +212,7 @@ jobs:
           cp ./out/arch/arm64/boot/Image.lz4 ../AnyKernel3/Image.lz4
           elif [ "${{ inputs.codename }}" == "zuma" ]; then
             cat ./out/google-devices/zuma/dts/*.dtb > ../AnyKernel3/dtb
+          fi
 
       - name: Create ZIP Files for Different Formats
         run: |
