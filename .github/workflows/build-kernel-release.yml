@@ -1,8 +1,8 @@
 name: Build and Release Sultan Kernels
 
 permissions:
-  contents: write  # Allow writing to repository contents (for pushing tags)
-  actions: write   # Allows triggering actions
+  contents: write
+  actions: write
   
 on:
   push:
@@ -23,8 +23,7 @@ jobs:
     secrets: inherit
     with:
       codename: "gs201"
-      repo: "android_kernel_google_gs201"
-      android_version: "android14"
+      android_version: "android15" # Обновлено до актуального для Tensynos
       kernel_version: "6.1"
       
   build-kernel-zuma:
@@ -32,8 +31,7 @@ jobs:
     secrets: inherit
     with:
       codename: "zuma"
-      repo: "android_kernel_google_zuma"
-      android_version: "android14"
+      android_version: "android15"
       kernel_version: "6.1"
 
   build-kernel-zumapro:
@@ -41,8 +39,7 @@ jobs:
     secrets: inherit
     with:
       codename: "zumapro"
-      repo: "android_kernel_google_zumapro"
-      android_version: "android14"
+      android_version: "android15"
       kernel_version: "6.1"
 
   trigger-release:
@@ -54,100 +51,55 @@ jobs:
     if: ${{ inputs.make_release || github.event_name == 'push' }}
     env:
       REPO_OWNER: TheWildJames
-      REPO_NAME: Sultan_KernelSU_SUSFS
+      REPO_NAME: Sultan_KernelSU
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_NAME: "*TEST BUILD* Sultan Kernels With KernelSU Next & SUSFS v1.5.9 *TEST BUILD*"
+      RELEASE_NAME: "Sultan Kernels with KernelSU Next (Tensynos)"
       RELEASE_NOTES: |
-        This release contains KernelSU Next and SUSFS v1.5.9
-        
-        ⚠️ **COMPATIBILITY NOTICE** ⚠️
-        Please ensure compatibility by comparing release dates with official Sultan kernel releases:
-        - Check official Sultan releases: https://github.com/kerneltoast/android_kernel_google_gs201/releases
-        - This build is based on the latest Sultan kernel commits as of build date
-        - Always verify your device's Android version matches the kernel target (Android 14)
-        - Recommended to use kernels released within 30 days of official Sultan updates
-        
-        Module: 
-        -> https://github.com/sidex15/ksu_module_susfs
-        
-        Managers:
-        -> https://github.com/WildKernels/Wild_KSU
-        -> https://github.com/KernelSU-Next/KernelSU-Next
+        This release contains Sultan Kernel based on Tensynos with KernelSU Next.
         
         Features:
         [+] Wild KSU & KernelSU-Next Managers
-        [+] SUSFS v1.5.9
         [+] Maphide LineageOS Detections
         [+] Futile Maphide for jit-zygote-cache Detections
         [+] Magic Mount Support
         
-        📅 **Release Date Compatibility Check:**
-        - Built on: $(date '+%Y-%m-%d %H:%M:%S UTC')
+        📅 Built on: $(date '+%Y-%m-%d %H:%M:%S UTC')
 
     steps:
-      # Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Get the Latest Tag from GitHub
       - name: Generate and Create New Tag
         run: |
-            # Fetch the latest tag from GitHub (this is the latest tag based on the GitHub API)
             LATEST_TAG=$(gh api repos/$REPO_OWNER/$REPO_NAME/tags --jq '.[0].name')
             if [ -z "$LATEST_TAG" ]; then
-              LATEST_TAG="v1.5.9-r0"  # Default to v1.5.7-0 if no tag exists
+              LATEST_TAG="v1.0.0-r0"
             fi
-            
-            # Increment the suffix (e.g., v1.5.7-0 becomes v1.5.7-1)
             NEW_TAG=$(echo "$LATEST_TAG" | awk -F'-r' '{suffix=$2; if (!suffix) suffix=0; suffix++; printf "%s-r%d", $1, suffix}')
-            
-            # Output the new tag to be used
-            echo "New tag: $NEW_TAG"
-            
-            # Set the new tag as an environment variable to be used in later steps
             echo "NEW_TAG=${NEW_TAG}" >> $GITHUB_ENV
-            
-            # Create the tag in the repository
             git tag $NEW_TAG
             git push origin $NEW_TAG
             
-      # Download Artifacts for A12 (Only if A12 Build is successful or input is true or empty)
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./downloaded-artifacts
 
-      # Create GitHub Release and upload files if make_release is true
       - name: Create GitHub Release
         uses: actions/create-release@v1
         with:
-          tag_name: ${{ env.NEW_TAG }}  # Use the generated tag for the release
-          prerelease: true  # Mark the release as a pre-release
-          release_name: ${{ env.RELEASE_NAME }}  # Pass the RELEASE_NAME to the action
-          body: ${{ env.RELEASE_NOTES }}  # Pass the RELEASE_NOTES to the action
+          tag_name: ${{ env.NEW_TAG }}
+          prerelease: true
+          release_name: ${{ env.RELEASE_NAME }}
+          body: ${{ env.RELEASE_NOTES }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release Assets Dynamically
         run: |
-          # Loop through all files in the downloaded-artifacts directory
           for file in ./downloaded-artifacts/kernel-*/*; do
-              # Skip directories
-              if [ -d "$file" ]; then
-                  continue
-              fi
-
-              # Upload the file to the GitHub release
-              echo "Uploading $file..."
+              if [ -d "$file" ]; then continue; fi
               gh release upload ${{ env.NEW_TAG }} "$file"
           done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEW_TAG: ${{ env.NEW_TAG }}
-
-
-      # Display Files Uploaded
-      - name: Display Files Uploaded
-        run: |
-          echo "GitHub release created with the following files:"
-          ls ./downloaded-artifacts/**/*
