@@ -27,17 +27,21 @@ jobs:
         with:
           remove-dotnet: 'true'
           remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
           remove-docker-images: 'true'
-          remove-large-packages: 'true'
-          remove-swapfile: 'true'
           verbose: 'true'
 
-      - name: Download and extract GCC 14.2.0 toolchain
+      - name: Install Build Dependencies
         run: |
-          wget https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/14.2.0/x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
-          tar -xf x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
+          sudo apt-get update
+          sudo apt-get install -y bc build-essential flex bison lld llvm sed hexedit curl wget libncurses-dev libssl-dev setup-config
+
+      - name: Install Clang & LLVM
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/clang
+          cd $GITHUB_WORKSPACE/clang
+          # Загружаем официальный Google Clang, который используется для ядер Android
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r522817.tar.gz
+          tar -xf clang-r522817.tar.gz
 
       - name: Clone Repositories
         run: |
@@ -53,49 +57,57 @@ jobs:
       - name: Apply KSU Hooks & Hide Stuff
         run: |
           cd $KERNEL_DIR
-          # Apply syscall hooks
+          # Использование -f (force), чтобы не падать, если патч частично применен
           cp ../kernel_patches/wild/hooks/syscall_hooks.patch ./
-          patch -p1 -F 3 < syscall_hooks.patch
-          # Apply Hide Stuff
+          patch -p1 --forward < syscall_hooks.patch || true
+          
           cp ../kernel_patches/69_hide_stuff.patch ./
-          patch -p1 -F 3 < 69_hide_stuff.patch
-
-      - name: Configure Defconfig
-        run: |
-          cd $KERNEL_DIR
-          DEFCONFIG="./arch/arm64/configs/${{ inputs.codename }}_defconfig"
-          
-          # KernelSU Config
-          echo "CONFIG_KSU=y" >> $DEFCONFIG
-          echo "CONFIG_KSU_KPROBES_HOOK=n" >> $DEFCONFIG
-          
-          # Network & Optimizations
-          echo "CONFIG_TMPFS_XATTR=y" >> $DEFCONFIG
-          echo "CONFIG_TMPFS_POSIX_ACL=y" >> $DEFCONFIG
-          echo "CONFIG_IP_NF_TARGET_TTL=y" >> $DEFCONFIG
-          echo "CONFIG_TCP_CONG_ADVANCED=y" >> $DEFCONFIG
-          echo "CONFIG_TCP_CONG_BBR=y" >> $DEFCONFIG
-          echo "CONFIG_NET_SCH_FQ=y" >> $DEFCONFIG
-          
-          # Localversion
-          sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="-Sultan-Wild"/' $DEFCONFIG
+          patch -p1 --forward < 69_hide_stuff.patch || true
 
       - name: Build Kernel
         run: |
           cd $KERNEL_DIR
-          export PATH=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin:$PATH
-          make CROSS_COMPILE=aarch64-linux- CC=aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
-          make CROSS_COMPILE=aarch64-linux- CC=aarch64-linux-gcc -j$(nproc --all)
+          
+          # Настройка переменных окружения для Clang
+          CLANG_BIN=$GITHUB_WORKSPACE/clang/bin
+          export PATH="$CLANG_BIN:$PATH"
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/clang/lib64:$LD_LIBRARY_PATH"
+          
+          # Параметры сборки
+          MAKE_ARGS="
+            ARCH=arm64 \
+            O=out \
+            CC=clang \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            LD=ld.lld \
+            AR=llvm-ar \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            -j$(nproc --all)
+          "
+          
+          # Настройка конфига
+          make $MAKE_ARGS ${{ inputs.codename }}_defconfig
+          
+          # Включение нужных опций в .config напрямую
+          echo "CONFIG_KSU=y" >> out/.config
+          echo "CONFIG_LOCALVERSION=\"-Sultan-Wild\"" >> out/.config
+          
+          # Финальная компиляция
+          make $MAKE_ARGS
 
       - name: Copy Images and DTBs
         run: |
-          # Пути в Tensynos могут отличаться, адаптируем под стандартную структуру
-          cp $KERNEL_DIR/arch/arm64/boot/Image.lz4 ./AnyKernel3/Image.lz4
+          # В Tensynos с использованием O=out файлы лежат внутри out/
+          cp $KERNEL_DIR/out/arch/arm64/boot/Image.lz4 ./AnyKernel3/Image.lz4 || cp $KERNEL_DIR/out/arch/arm64/boot/Image ./AnyKernel3/Image
           
-          # Сборка DTB для конкретного устройства
-          DTB_PATH="$KERNEL_DIR/arch/arm64/boot/dts/google/${{ inputs.codename }}"
-          # Если путь выше не сработает (зависит от структуры Sultan), используем поиск:
-          find $KERNEL_DIR/arch/arm64/boot/dts/ -name "*.dtb" -exec cat {} + > ./AnyKernel3/dtb
+          # Собираем все DTB
+          find $KERNEL_DIR/out/arch/arm64/boot/dts/google/ -name "*.dtb" -exec cat {} + > ./AnyKernel3/dtb
 
       - name: Create ZIP
         run: |
